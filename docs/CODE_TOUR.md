@@ -4,9 +4,10 @@ A guided map of the code, kept up to date at the end of every stage. For each fi
 it lists every function with one or two plain sentences: what it does and why it
 exists. Read this before reviewing a diff.
 
-**Stage reached: 1 (data sources verified).** The model files were moved into `src/`
-but not yet commented to the Stage 0.1 standard — that happens in Stages 2 to 4, so
-the function notes below are brief placeholders for now.
+**Stage reached: 2 (dataset build commented and guarded).** `src/build_dataset.py`
+is now documented to the Stage 0.1 standard. `src/batching.py` and `src/plan.py` are
+still lightly commented — Stages 3 and 4 bring them up to the same level, so their
+function notes below stay brief for now.
 
 ---
 
@@ -75,6 +76,48 @@ so a reviewer can tell a handled quirk from a new bug after a data refresh.
 | The infrastructure file has many rows per licence (linked facilities, commingling) | 680,722 rows, 486,382 unique — 194,340 extra | `drop_duplicates("LicenceNumber")`, keep the first |
 | A depth of `0` means "not reported" | 3,081 rows at exactly 0, plus 2,042 already blank | Replace `0` with missing, then fall back to the median depth when costing |
 
+### The workbook already carries the location (use it as a check)
+
+The inactive workbook has a `Surface Location` column, and a `UWI` that embeds the
+same thing: licence `0000007` shows `7-21-57-21W4` and `00/07-21-057-21W4/0`. It
+parses for all 76,943 rows and agrees with the Petrinex licence file we actually use
+for coordinates on 99.99% of them:
+
+| Field | Disagreements |
+|---|---|
+| township, range, meridian | 0 |
+| section | 2 |
+| legal subdivision | 4 |
+| **all five agree** | **76,938 of 76,943** |
+
+Two reasons this matters. It is independent evidence the licence-number join is
+sound — the failure that would otherwise be silent. And because `surface_location`
+is a committed output column, the coordinates can be re-derived from it and checked
+without touching `raw/`, which makes a much stronger test than checking leading
+zeros alone.
+
+It also means the 103 MB Petrinex licence file is redundant *for coordinates*: the
+table could be rebuilt from the 7.9 MB workbook plus the infrastructure file (still
+needed for depth). Left as a possible Stage 8 simplification, not done.
+
+### Choosing a depth when a licence has several rows
+
+The guide says keep the first infrastructure row per licence. "First" means
+arbitrary file order, so it is worth knowing what that costs:
+
+- 24,642 inactive wells have more than one infrastructure row
+- 3,830 of those disagree on depth (median spread 278 m, worst 5,004 m)
+- the disagreement crosses a cost-tier boundary for 654 wells
+- keeping the first row understates total cost by **$11,098,225, or 0.29%** of the
+  $3.78B all-wells unbatched total
+
+The bias only ever runs one way: the first row can understate the cost, never
+overstate it. **Decision (Vincent, Stage 1 review): keep the guide's "first row"
+rule and document the bias.** At 0.29% it changes no conclusion, and the guessed
+mobilization cost already moves the result by far more (±130% across the sensitivity
+range). Keeping it also means the rebuilt CSV stays identical to the committed one,
+so the Stage 2 "only replace it if it matches" check still works.
+
 ### A trap worth knowing about
 
 The licence file contains meridian values `0, 4, 5, 6`, but `MER_LON` only maps 4, 5
@@ -124,17 +167,44 @@ latter breaks the imports.
 Marks `src/` as a package. No logic. It exists so the scripts, the app and the
 tests all import the model code the same way.
 
-## `src/build_dataset.py` — Stage 2
+## `src/build_dataset.py` — Stage 2 (fully commented)
 
-Builds the one-row-per-well table from the three raw files.
+Builds the one-row-per-well table from the three raw files. The only file in the
+project that reads `raw/`; everything downstream treats the CSV as clean input.
 
 | Function | What and why |
 |---|---|
-| `dls_to_latlon(lsd, sec, twp, rge, mer)` | Converts an Alberta legal land description (LSD, section, township, range, meridian) into approximate latitude and longitude. Exists because neither Petrinex file carries coordinates, and the batching model cannot group wells without positions. |
-| `build(inactive_xlsx, infra_csv, licence_csv)` | Reads the three files, joins them on licence number, adds the coordinates and a cleaned `depth_m`, and returns the output columns in snake_case. |
+| `to_snake_case(column_name)` | Lowercases a source column heading and swaps spaces for underscores. Exists because the three sources use three naming styles ("Licensee Name", "WellStatusFluid", "depth_m"); normalising once here means no downstream file quotes a column with a space in it. |
+| `numeric_column(frame, column_name)` | Reads a text column as numbers, turning anything unreadable into missing. Needed because every column is deliberately read as text to protect the leading zeros, so each real number has to be converted back. `errors="coerce"` means one odd value becomes missing instead of killing the build. |
+| `dls_to_latlon(lsd, sec, twp, rge, mer)` | Converts an Alberta legal land description into approximate latitude and longitude. Exists because neither Petrinex file carries coordinates and the batching model cannot group wells without positions. The single biggest source of approximation in the project — see the accuracy note below. |
+| `check_meridians(meridian_values)` | Raises if any well needs a meridian `MER_LON` cannot convert, or has none at all. Exists because an unmapped meridian would otherwise flow through as a blank coordinate with no error — a well silently dropped off the map. |
+| `check_join_integrity(frame)` | Raises if the workbook's own `Surface Location` stops agreeing with the Petrinex grid columns. Guards the project's quietest failure: if licence numbers are ever read as numbers, the leading zeros vanish, nothing joins, and the output is 76,943 rows of real company names with every coordinate blank — and a left join keeps the row count identical, so nothing else would notice. |
+| `build(inactive_xlsx, infra_csv, licence_csv)` | Reads the three files, applies every documented quirk fix, joins on licence number, runs both guards, adds coordinates and a cleaned `depth_m`, and returns the 14 output columns in snake_case. |
 
-Constants: `KM_PER_MILE` (mile-to-km with a 0.6% allowance for road allowances),
-`MER_LON` (longitude of the 4th, 5th and 6th meridians).
+Constants, all named and sourced in the file: `KM_PER_MILE` (exact mile-to-km, times
+an assumed +0.6% for road allowances), `MER_LON` (longitudes of the 4th, 5th and 6th
+meridians), `BASE_LAT_DEG` (49, where the survey grid starts), `SECTIONS_PER_SIDE`
+and `LSDS_PER_SIDE` (the 6x6 and 4x4 grids), `MILES_PER_LSD`, `KM_PER_DEG_LAT` and
+`KM_PER_DEG_LON_AT_EQUATOR`, `DEPTH_NOT_REPORTED` (the 0-means-missing rule),
+`MIN_LOCATION_AGREEMENT` (the guard threshold) and `OUTPUT_COLUMNS`.
+
+**Coordinate accuracy.** `lat`/`lon` are calculated by this project from the legal
+land description — never describe them as AER data. A rough check against five
+Alberta city locations showed errors of about 3 to 11 km, and those reference points
+were themselves eyeballed, so the true error is not precisely known. Adequate for
+deciding which wells fall within 15 km of each other; not adequate for navigation.
+The documented worked example (`07-21-057-21W4` → 53.9411 N, -113.0484) was verified
+against the code, and the snaking section numbering was spot-checked at the township
+corners: sections 1 and 6 share a latitude with 6 further west, section 7 sits
+directly above 6, and section 36 is the north-*east* corner, as the real survey has it.
+
+**Reproducibility note.** Rebuilding the table with the commented code reproduces the
+committed CSV exactly: same shape (76,943 x 14), same column names and order, and
+identical values in all 14 columns. The rebuilt file is not byte-identical, for two
+harmless reasons — pandas on Windows writes CRLF line endings while the committed
+file has LF (76,944 endings = 76,944 bytes), and one float prints one digit shorter
+(1 byte), which compares equal numerically. The committed file was therefore left in
+place rather than replaced, to avoid an 11 MB diff that changes no data.
 
 ## `src/batching.py` — Stage 3
 
@@ -177,8 +247,18 @@ Not written yet.
 
 - `src/plan.py` imports `numpy` but does not use it. Remove when Stage 4 rewrites
   that file with full comments.
-- **Stage 2:** guard the meridian lookup so an unmapped meridian fails loudly
-  instead of producing a silent `NaN` coordinate (see "A trap worth knowing about").
+- ~~**Stage 2:** guard the meridian lookup~~ — **done**, `check_meridians`. Verified
+  to raise on meridian 0 and on a missing meridian, and to pass on 4/5/6.
+- ~~**Stage 2:** assert the coordinates against `surface_location`~~ — **done**,
+  `check_join_integrity`. Verified to pass on matching locations and to raise on a
+  simulated broken join (0% agreement).
+- ~~**Stage 2:** comment the depth choice~~ — **done**, in `build` STEP 3.
+- **Stage 6:** reuse `check_join_integrity` as a test — it makes a stronger check
+  than leading zeros alone and needs only the committed CSV, not `raw/`.
+- **Housekeeping:** `core.autocrlf = true`, so git rewrites line endings in the
+  11 MB CSV on every checkout. A one-line `.gitattributes` (`data/*.csv -text`)
+  would stop git touching the data file at all. Not added — it is not in the
+  guide's layout, so it is Vincent's call.
 - **Stage 4:** the `1_121` median-depth fallback in `depth_cost` comes from the
   *joined* table's median depth, not from the raw infrastructure file (whose median
   is 1,015 m, since it covers all Alberta wells rather than only inactive ones).
