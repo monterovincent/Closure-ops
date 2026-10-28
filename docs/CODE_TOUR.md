@@ -4,10 +4,16 @@ A guided map of the code, kept up to date at the end of every stage. For each fi
 it lists every function with one or two plain sentences: what it does and why it
 exists. Read this before reviewing a diff.
 
-**Stage reached: 2 (dataset build commented and guarded).** `src/build_dataset.py`
-is now documented to the Stage 0.1 standard. `src/batching.py` and `src/plan.py` are
-still lightly commented — Stages 3 and 4 bring them up to the same level, so their
-function notes below stay brief for now.
+**Stage reached: 3 (batching model commented, and one real bug fixed).**
+`src/build_dataset.py` and `src/batching.py` are documented to the Stage 0.1
+standard. `src/plan.py` is still lightly commented — Stage 4 brings it up to the
+same level, so its function notes below stay brief for now.
+
+> **Stage 3 changed the numbers.** A projection bug was found and fixed (details
+> under `src/batching.py`). The all-wells result moved from 7,355 batches / BE
+> 18.84% to **7,053 batches / BE 18.93%**, and the Stage 4 budget figures moved with
+> it. The guide's Stage 4 targets were produced with the old, incorrect projection
+> and are superseded by the re-baselined numbers recorded below.
 
 ---
 
@@ -206,18 +212,66 @@ file has LF (76,944 endings = 76,944 bytes), and one float prints one digit shor
 (1 byte), which compares equal numerically. The committed file was therefore left in
 place rather than replaced, to avoid an 11 MB diff that changes no data.
 
-## `src/batching.py` — Stage 3
+## `src/batching.py` — Stage 3 (fully commented)
 
-Groups wells into crew trips and prices them against the no-batching case.
+Groups wells into crew trips and prices them against the no-batching case. This is
+where the project's central claim — that closing wells together is cheaper — turns
+into a number.
 
 | Function | What and why |
 |---|---|
-| `Params` (dataclass) | The five modelling knobs: `radius_km`, `max_batch`, `m_out`, `m_in_base`, `m_in_per_km`. All assumptions, not sourced figures. Kept in one place so the app's sliders and the tests change the same numbers. |
-| `to_xy_km(lat, lon)` | Projects latitude/longitude onto flat kilometre coordinates so distances are ordinary straight lines. Fine over the short distances used here. |
-| `_cluster_xy(xy, radius_km, cap)` | The clustering itself: sweeps wells west to east and lets each seed well claim its nearest unassigned neighbours within the radius, up to the cap. |
-| `cluster_wells(df, p, by)` | Runs the clustering once per company, because a company only closes its own wells. |
-| `local_route_km(xy)` | Estimates the driving distance inside one batch with a nearest-neighbour path. A cheap stand-in for route planning. |
-| `batching_efficiency(df, p, by)` | Prices every batch both ways and returns the per-batch table, a summary, and the wells with their batch labels. Produces the headline Batching Efficiency number. |
+| `Params` (dataclass) | The five modelling knobs: `radius_km`, `max_batch`, `m_out`, `m_in_base`, `m_in_per_km`. **All five are assumptions, none are sourced.** Kept in one object so the app's sliders, the tests and the command line all change the same definitions. |
+| `to_xy_km(lat, lon, ref_lat)` | Projects latitude/longitude onto flat kilometre coordinates so every later distance is ordinary Pythagoras, which is what the spatial index wants. The `ref_lat` argument is the fix described below. |
+| `_cluster_xy(xy, radius_km, cap)` | The clustering itself. Sweeps wells west to east; each unclaimed well becomes a seed and takes the nearest free wells within the radius, up to the cap. Greedy and deliberately not optimal — a seed claims its neighbours before later wells get a say. |
+| `cluster_wells(df, p, by)` | Runs the clustering once per company (811 of them), because a licensee is legally responsible for its own wells and two neighbouring wells owned by rivals will never share a crew. Also raises if any well ends up unlabelled. |
+| `local_route_km(xy)` | Estimates driving inside one batch with a nearest-neighbour path. Rough in three known ways: the route is ~25% longer than optimal, it measures straight lines not roads, and it depends on which well it starts from. |
+| `batching_efficiency(df, p, by)` | Prices every batch both ways and returns the per-batch table, the summary, and the wells with their batch labels. Produces the headline Batching Efficiency figure. |
+
+**Why there is a cap on batch size.** Without `max_batch`, the clustering produces
+groups far too large to be one real campaign. Measured on the real data: uncapped and
+grouped by company the biggest batch is **967 wells**; uncapped and ignoring company
+it reaches **1,471**. (The guide's "over 1,000 wells" refers to that second,
+pre-per-company version.) Pricing 1,471 wells as a single trip would invent an
+enormous saving out of nothing.
+
+**Why a spatial index rather than a distance table.** An all-Alberta pairwise table
+would be 76,943² = 5.92 billion distances, which at 8 bytes each is **47.4 GB** —
+impossible on a normal machine. A KD-tree answers "what is within 15 km of this
+point" in under a second without ever building it.
+
+### The projection bug found and fixed in Stage 3
+
+The original formula was `x = R * radians(lon) * cos(lat)`, using **each point's own
+latitude**. That makes `x` depend on latitude, so a well's x coordinate shifts when
+it moves north even at identical longitude — the projection shears. Measured in
+central Alberta:
+
+| separation | true | as measured (before) | as measured (after) |
+|---|---|---|---|
+| 15 km north–south | 15.00 km | **27.74 km** (+85%) | 15.00 km |
+| 15 km east–west | 14.97 km | 14.97 km | 14.97 km |
+
+The effect was not cosmetic. Wells genuinely within range but stacked north–south
+were rejected by the radius test, so batches came out smaller and more numerous than
+the geography justified — the model **understated** what batching is worth.
+
+The fix is what equirectangular projection actually means: pick one reference
+latitude (the mean of all wells, 53.92 N), scale every longitude by its cosine, and
+let `x` depend only on longitude. Verified against great-circle distance on 38,631
+real within-batch pairs: median error 0.005%, worst 0.29%.
+
+**The limitation that remains**, and it is a real one: the east–west scale is exact
+only at the reference latitude. Measured on a 15 km east–west pair, the model says
+14.32 km at every latitude, while the truth is 15.95 km at latitude 49 and 12.16 km
+at latitude 60. So the nominal 15 km radius behaves like roughly **16.7 km for the
+southernmost wells and 12.7 km for the northernmost**. This belongs in the README,
+not buried in code. Eliminating it entirely would mean clustering on 3D spherical
+coordinates — a candidate Stage 8 upgrade.
+
+An earlier attempt used a *per-company* reference latitude, which is worse: a company
+whose wells span the province has a mean latitude that is a poor local reference for
+most of them, and 150 batches ended up accepting wells up to 16.9 km from their seed.
+One shared reference for the whole run keeps the radius test consistent for everyone.
 
 ## `src/plan.py` — Stage 4
 
@@ -263,11 +317,36 @@ Not written yet.
   *joined* table's median depth, not from the raw infrastructure file (whose median
   is 1,015 m, since it covers all Alberta wells rather than only inactive ones).
   Say so in the comment, so the number does not look invented.
-- **Stage 4:** the batched well count comes out one well above the guide's figure at
-  both budgets (3,114 vs 3,113 at $50M; 29,804 vs 29,803 at $750M) while every other
-  number matches exactly. Most likely a tie-break ordering difference in the
-  `value / cost` sort under pandas 3.1.0, but this is unconfirmed — check it when
-  rewriting `greedy_fill`.
+- ~~**Stage 4:** the batched well count comes out one well above the guide~~ —
+  superseded. The Stage 3 projection fix re-baselined these numbers entirely; see
+  "Current results" below.
+- **Stage 5 — performance.** The guide assumes a full run takes about 4 seconds. It
+  takes about **40 seconds**. Profiled: clustering 0.58s, projection 0.00s, groupby
+  0.01s, `local_route_km` 0.97s, and **`df.iloc[positions]` per batch 32.1s** across
+  7,053 slices. The pricing loop rebuilds a small dataframe for every batch. Fixing
+  it means replacing the per-batch `df.iloc` with vectorised `groupby` aggregations.
+  Not done in Stage 3, which was a commenting stage — but the app will feel broken
+  without it.
+- **Stage 6:** test the projection against great-circle distance, not just the
+  worked example. The bug fixed in Stage 3 would have been caught immediately by one.
+
+---
+
+## Current results (defaults, after the Stage 3 projection fix)
+
+Everything below is **under the assumed costs**, which are not sourced. The
+one-by-one figures do not involve clustering, which is why they did not move.
+
+| | before the fix | after the fix | guide's target |
+|---|---|---|---|
+| all-wells batches | 7,355 | **7,053** | about 7,355 |
+| all-wells BE | 18.84% | **18.93%** | about 18.8% |
+| $50M — batched wells | 3,114 | **3,109** | about 3,113 |
+| $50M — one by one | 1,976 | 1,976 | about 1,976 |
+| $750M — batched wells | 29,804 | **29,857** | about 29,803 |
+| $750M — one by one | 21,782 | 21,782 | about 21,782 |
+
+Spend stays under budget in both cases ($49,985,099 and $749,979,760).
 - The function notes above are one-liners. Stages 2 to 4 expand each file to the
   commenting standard in section 0.1 of the build guide, and this tour gets the
   "why" for each formula alongside it.
