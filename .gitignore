@@ -1,0 +1,13 @@
+# NOTE: patterns must start at column 1. Leading spaces are part of the pattern
+# in git, so "   raw/" would only ignore a folder literally named "   raw".
+
+# Downloaded source files: ~390 MB total, far over GitHub's 100 MB file limit.
+raw/
+
+# Secrets: never committed. See Stage 7 of CLOSUREOPS_BUILD_GUIDE.md.
+.env
+.streamlit/secrets.toml
+
+# Local-only build artefacts.
+__pycache__/
+.venv/

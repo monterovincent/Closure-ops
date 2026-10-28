@@ -1,0 +1,11 @@
+# Pinned so the app behaves the same locally and on Streamlit Community Cloud.
+# Versions are the ones installed and tested in Stage 0 on Python 3.12.
+# Install with: python -m pip install -r requirements.txt
+
+pandas==3.1.0        # the whole project is dataframe work: joins, groupby, filters
+numpy==2.5.4         # array maths for the coordinate and distance formulas
+scipy==1.18.1        # cKDTree, the spatial index that makes clustering fast
+openpyxl==3.1.5      # lets pandas read the AER inactive-well .xlsx workbook
+streamlit==1.66.1    # the web app (Stage 5)
+pydeck==0.9.3        # the map layer inside the app
+pytest==9.2.0        # the automated checks (Stage 6)
