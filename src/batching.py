@@ -422,41 +422,71 @@ def batching_efficiency(df: pd.DataFrame, p: Params | None = None,
     reference_latitude = float(np.nanmean(df["lat"].to_numpy(dtype=float)))
     xy = to_xy_km(df["lat"], df["lon"], ref_lat=reference_latitude)
 
-    # STEP 3: price each batch.
-    batch_rows = []
-    for batch_number, row_positions in df.groupby("batch").indices.items():
-        wells_in_batch = df.iloc[row_positions]
-        well_count = len(wells_in_batch)
-        route_km = local_route_km(xy[row_positions])
-        work_cost = float(wells_in_batch["work_cost"].sum())
+    # STEP 3: price every batch.
+    #
+    # WHY THIS IS A groupby AND NOT A LOOP: the obvious way to write this is to pull
+    # each batch out with `df.iloc[row_positions]` and read the totals off the small
+    # dataframe that comes back. That is how it was written first, and it cost 32 of
+    # the 40 seconds a full run took - building 7,053 throwaway dataframes just to
+    # read four numbers out of each one. Asking pandas for every batch's totals in a
+    # single pass is the operation it is actually built for. The output is
+    # identical, column for column; only the speed changes.
+    grouped = df.groupby("batch", sort=True)
 
-        # The two formulas from the docstring above. The "- 1" on the local moves
-        # is the point worth remembering: arriving at the first well is the long
-        # haul, so only the moves *between* wells are charged locally.
-        batched_cost = (p.m_out
-                        + (well_count - 1) * p.m_in_base
-                        + p.m_in_per_km * route_km
-                        + work_cost)
-        unbatched_cost = work_cost + p.m_out * well_count
+    # The route length is the one part that cannot be vectorised, because
+    # nearest-neighbour routing is a sequential walk - where you go next depends on
+    # where you are. It stays cheap regardless: a batch holds at most `max_batch`
+    # wells, and the whole set costs about a second. `grouped.indices` maps each
+    # batch number to the row positions in it, which is all `local_route_km` needs.
+    route_km_by_batch = pd.Series(
+        {batch_number: local_route_km(xy[row_positions])
+         for batch_number, row_positions in grouped.indices.items()},
+        dtype=float,
+    ).sort_index()
 
-        batch_rows.append({
-            "batch": batch_number,
-            "group": wells_in_batch[by].iloc[0] if by and by in wells_in_batch else "",
-            "wells": well_count,
-            # WHY the mean: the map draws one dot per batch, and the average
-            # position of its wells is a fair place to put it.
-            "lat": wells_in_batch["lat"].mean(),
-            "lon": wells_in_batch["lon"].mean(),
-            "route_km": round(route_km, 1),
-            "work_cost": work_cost,
-            "batched_cost": batched_cost,
-            "unbatched_cost": unbatched_cost,
-            # Total risk closed by doing this batch. src/plan.py treats this as the
-            # "value" of the batch when deciding what to buy with the budget.
-            "risk_score": float(wells_in_batch["risk_weight"].sum()),
-        })
+    # Every one of these is indexed by batch number, so the arithmetic below lines
+    # up automatically without any manual bookkeeping.
+    wells_per_batch = grouped.size()
+    work_cost_per_batch = grouped["work_cost"].sum().astype(float)
+    risk_per_batch = grouped["risk_weight"].sum().astype(float)
 
-    table = pd.DataFrame(batch_rows)
+    # The two formulas from the docstring above. The "- 1" on the local moves is
+    # the point worth remembering: arriving at the first well is the long haul, so
+    # only the moves *between* wells are charged locally.
+    #
+    # WHY the unrounded route is used here: `route_km` is rounded to one decimal
+    # place for display, but the cost has to come from the full-precision value, or
+    # the totals would drift by a few cents per batch across 7,053 of them.
+    batched_cost_per_batch = (p.m_out
+                              + (wells_per_batch - 1) * p.m_in_base
+                              + p.m_in_per_km * route_km_by_batch
+                              + work_cost_per_batch)
+    unbatched_cost_per_batch = work_cost_per_batch + p.m_out * wells_per_batch
+
+    # WHY `.first()` for the company name: every well in a batch belongs to the same
+    # company by construction (see `cluster_wells`), so any member's value is the
+    # batch's value.
+    if by and by in df:
+        group_names = grouped[by].first()
+    else:
+        group_names = pd.Series("", index=wells_per_batch.index)
+
+    table = pd.DataFrame({
+        "batch": wells_per_batch.index,
+        "group": group_names,
+        "wells": wells_per_batch,
+        # WHY the mean: the map draws one dot per batch, and the average position
+        # of its wells is a fair place to put it.
+        "lat": grouped["lat"].mean(),
+        "lon": grouped["lon"].mean(),
+        "route_km": route_km_by_batch.round(1),
+        "work_cost": work_cost_per_batch,
+        "batched_cost": batched_cost_per_batch,
+        "unbatched_cost": unbatched_cost_per_batch,
+        # Total risk closed by doing this batch. src/plan.py treats this as the
+        # "value" of the batch when deciding what to buy with the budget.
+        "risk_score": risk_per_batch,
+    }).reset_index(drop=True)
 
     # STEP 4: add it all up into the headline numbers.
     total_unbatched = table["unbatched_cost"].sum()

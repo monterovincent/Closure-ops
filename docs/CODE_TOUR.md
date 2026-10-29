@@ -4,9 +4,9 @@ A guided map of the code, kept up to date at the end of every stage. For each fi
 it lists every function with one or two plain sentences: what it does and why it
 exists. Read this before reviewing a diff.
 
-**Stage reached: 4 (all three model files fully commented).** `src/build_dataset.py`,
-`src/batching.py` and `src/plan.py` are all documented to the Stage 0.1 standard.
-What remains is the app (Stage 5), then tests and the README (Stage 6).
+**Stage reached: 5 (the app works, and the model got 20x faster).** All three model
+files plus `app.py` are documented to the Stage 0.1 standard. What remains is tests
+and the README (Stage 6), then deployment (Stage 7).
 
 > **Stage 3 changed the numbers.** A projection bug was found and fixed (details
 > under `src/batching.py`). The all-wells result moved from 7,355 batches / BE
@@ -163,7 +163,7 @@ latter breaks the imports.
 | Rebuild the dataset | `python -m src.build_dataset raw/Inactive_Well_Licence_List.xlsx raw/Well_Infrastructure-AB.CSV raw/Well_Licence-AB.CSV data/inactive_wells_joined.csv` |
 | Batching self-check demo | `python -m src.batching` |
 | Tests (Stage 6) | `python -m pytest` |
-| The app (Stage 5) | `streamlit run app.py` |
+| The app | `streamlit run app.py` |
 
 ---
 
@@ -303,9 +303,69 @@ Verified against the real function. Accepted because the cost inputs are guesses
 an exactly optimal plan built on an invented mobilization cost would be precision
 without accuracy, and far too slow to move a slider against.
 
-## `app.py` — Stage 5
+## `app.py` — Stage 5 (fully commented)
 
-Not written yet.
+The Streamlit front end, and the only file a user ever sees. Run with
+`streamlit run app.py` from the project root.
+
+| Function | What and why |
+|---|---|
+| `load_data(path)` | Reads the 11 MB well table once per session and caches it. Re-reading on every slider move would dominate the runtime for no reason. |
+| `cluster_and_price(path, radius_km, max_batch, mobilization_cost)` | The expensive step, cached on exactly the three inputs that change the answer. |
+| `build_plan(batch_table, wells, budget, mobilization_cost, company)` | The cheap half: filter to a company, then spend the budget both ways. Deliberately outside the cache so the budget slider feels instant. |
+
+**The caching split, and why it is shaped this way.** Clustering and pricing depend
+only on the radius, the batch cap and the mobilization cost. The budget decides what
+gets *bought* out of the resulting table; the company dropdown decides what gets
+*shown*. Neither changes how wells are grouped. So the cache key is just those three
+values, and dragging the budget slider — the thing a reader actually does — never
+re-runs the model at all.
+
+**Why the whole province is clustered even when one company is selected.**
+`to_xy_km` takes its reference latitude from the wells handed to it, so clustering a
+single company first would give that company a different reference latitude, and
+therefore slightly different batches, than it has under "All companies". Clustering
+everything once and filtering afterwards keeps the two views consistent. Verified:
+a company's batch identities are unchanged by filtering.
+
+**Two rendering bugs found by looking at the running app**, both of which the
+numbers alone would not have caught:
+
+1. Streamlit renders captions as markdown, and markdown treats `$...$` as inline
+   LaTeX. "Spending $49,985,099 of a $50,000,000 budget" silently lost **both**
+   dollar signs and rendered the text between them as a formula. Every `$` in
+   markdown is now escaped as `\$`.
+2. The budget slider's printf-style `format="$%d"` cannot insert thousands
+   separators, so it read `$50000000`. The slider now works in millions and
+   displays `$50M`.
+
+**A result that looks like a bug and is not.** Dragging mobilization to $0 makes the
+saving go *negative* — and "extra wells from batching" goes negative too. At a $750M
+budget the batched plan closes 1,784 *fewer* wells than doing them one at a time.
+That is correct: with no long haul to share, batching only adds the cost of local
+moves between wells. The exact magnitude depends on the budget and radius (−10.9% at
+$50M/15 km, −7.0% at $750M/20 km) because the plan-level saving is measured over
+whichever batches the budget bought; the all-wells figure barely moves (−4.3% vs
+−4.4%). **The invariant to check at $0 is the sign, not the number.** The "How this
+works" expander says all of this, so a reader who tries it is not misled.
+
+**Map dot sizing — a chart that misrepresented magnitude.** Dot radius was set
+straight from the well count (`wells × 900` metres). But a circle's area grows with
+the square of its radius, so a 25-well trip was drawn with 25² = **625×** the area of
+a 1-well trip rather than 25×, and people judge circles by area. Radius is now scaled
+by the **square root** of the well count, so area tracks the data:
+
+| wells | old radius | new radius | old area | new area |
+|---|---|---|---|---|
+| 1 | 900 m | 2,400 m | 1× | 1× |
+| 9 | 8,100 m | 7,200 m | 81× | 9× |
+| 25 | 22,500 m | 12,000 m | **625×** | **25×** |
+
+Opacity and the maximum pixel radius were also reduced, because several hundred
+overlapping trips are the normal case at larger budgets, not the exception. In
+fairness the `radius_min_pixels`/`radius_max_pixels` clamps were already masking much
+of the exaggeration on screen — the visible symptom was crowding rather than scale —
+but the encoding was wrong in principle and is now right.
 
 ## `tests/test_core.py` — Stage 6
 
@@ -335,13 +395,13 @@ Not written yet.
 - ~~**Stage 4:** the batched well count comes out one well above the guide~~ —
   superseded. The Stage 3 projection fix re-baselined these numbers entirely; see
   "Current results" below.
-- **Stage 5 — performance.** The guide assumes a full run takes about 4 seconds. It
-  takes about **40 seconds**. Profiled: clustering 0.58s, projection 0.00s, groupby
-  0.01s, `local_route_km` 0.97s, and **`df.iloc[positions]` per batch 32.1s** across
-  7,053 slices. The pricing loop rebuilds a small dataframe for every batch. Fixing
-  it means replacing the per-batch `df.iloc` with vectorised `groupby` aggregations.
-  Not done in Stage 3, which was a commenting stage — but the app will feel broken
-  without it.
+- ~~**Stage 5 — performance**~~ — **fixed in Stage 5.** A full run went from
+  ~40s to **0.90s**. The pricing loop was rebuilding a throwaway dataframe per batch
+  via `df.iloc[positions]`, costing 32.1s across 7,053 slices; it is now a single
+  vectorised `groupby`. Proven identical before and after: all ten columns match,
+  dtypes match, BE unchanged at 0.1893. The only difference is `lat`/`lon` at the
+  1e-14 level, from float summation order — about two nanometres. Every cost column
+  is bit-for-bit identical.
 - **Stage 6:** test the projection against great-circle distance, not just the
   worked example. The bug fixed in Stage 3 would have been caught immediately by one.
 
