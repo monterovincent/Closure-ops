@@ -4,10 +4,9 @@ A guided map of the code, kept up to date at the end of every stage. For each fi
 it lists every function with one or two plain sentences: what it does and why it
 exists. Read this before reviewing a diff.
 
-**Stage reached: 3 (batching model commented, and one real bug fixed).**
-`src/build_dataset.py` and `src/batching.py` are documented to the Stage 0.1
-standard. `src/plan.py` is still lightly commented — Stage 4 brings it up to the
-same level, so its function notes below stay brief for now.
+**Stage reached: 4 (all three model files fully commented).** `src/build_dataset.py`,
+`src/batching.py` and `src/plan.py` are all documented to the Stage 0.1 standard.
+What remains is the app (Stage 5), then tests and the README (Stage 6).
 
 > **Stage 3 changed the numbers.** A projection bug was found and fixed (details
 > under `src/batching.py`). The all-wells result moved from 7,355 batches / BE
@@ -273,19 +272,36 @@ whose wells span the province has a mean latitude that is a poor local reference
 most of them, and 150 batches ended up accepting wells up to 16.9 km from their seed.
 One shared reference for the whole run keeps the radius test consistent for everyone.
 
-## `src/plan.py` — Stage 4
+## `src/plan.py` — Stage 4 (fully commented)
 
-Spends a budget and reports the two totals.
+Spends a budget two ways and reports both, which is the comparison the whole project
+exists to make.
 
 | Function | What and why |
 |---|---|
-| `depth_cost(d)` | Maps a well's depth to a placeholder plug-and-abandon cost tier. Missing depth falls back to the median. |
-| `load_wells(path)` | Reads the processed CSV (licence as text, to keep leading zeros) and adds `work_cost` and `risk_weight`. |
-| `greedy_fill(items, cost_col, value_col, budget)` | Buys items in best-value-per-dollar order while they fit. A fast approximation of the knapsack problem, not guaranteed optimal. |
-| `plan(df, budget, p)` | Runs the batching, fills the budget with batches, fills the same budget with single wells, and returns both so they can be compared. |
+| `depth_cost(depth_m)` | Prices the physical job of plugging one well from its depth. Exists because the budget cannot be spent without a price per well, and depth is the only cost driver the data offers. Tier boundaries are inclusive: exactly 600 m costs $13,300, 600.1 m costs $30,665. |
+| `load_wells(path)` | Reads the processed CSV (licence as text, to protect the leading zeros) and adds `work_cost` and `risk_weight`. One loader so the app, the tests and the command line all read the data identically. |
+| `greedy_fill(items, cost_col, value_col, budget)` | The actual spending decision: rank by risk-per-dollar, take whatever still fits, keep going past items that do not. A greedy approximation to the knapsack problem — explicitly *not* optimal, with a worked counter-example in the docstring. |
+| `plan(df, budget, p)` | Runs the batching, fills the budget with whole batches, fills the same budget one well at a time, and returns both. The function the app calls. |
 
-Constants: `RISK_WEIGHT` (High 3 / Medium 2 / Low 1), `DEPTH_TIERS` (placeholder
-stand-in for the AER Directive 011 cost tables).
+Constants, all labelled in the file: `RISK_WEIGHT` (an invented High 3 / Medium 2 /
+Low 1 scale), `DEPTH_TIERS` (a placeholder standing in for the AER Directive 011
+cost tables), and `MEDIAN_DEPTH_M` = 1,121.
+
+**Where `MEDIAN_DEPTH_M` comes from**, since it would otherwise look invented: it is
+the median `depth_m` of the *joined* table — inactive wells specifically. It is not
+the median of the raw infrastructure file, which is 1,015 m, because that file covers
+every well in Alberta rather than only the inactive ones. It is used for the 122
+wells whose depth was never reported, and at 1,121 m it lands in the second tier, so
+an unknown well is costed at $30,665.
+
+**Why `greedy_fill` is not optimal, concretely.** On a $10,000 budget with batch D
+worth 7 risk points at $6,000, and batches E and F each worth 5 at $5,000: greedy
+takes D first because its ratio is best, then neither E nor F fits in the remaining
+$4,000, closing 7 points. Taking E and F would have closed 10 for exactly $10,000.
+Verified against the real function. Accepted because the cost inputs are guesses —
+an exactly optimal plan built on an invented mobilization cost would be precision
+without accuracy, and far too slow to move a slider against.
 
 ## `app.py` — Stage 5
 
@@ -299,8 +315,7 @@ Not written yet.
 
 ## Open notes for later stages
 
-- `src/plan.py` imports `numpy` but does not use it. Remove when Stage 4 rewrites
-  that file with full comments.
+- ~~`src/plan.py` imports `numpy` but does not use it~~ — **removed in Stage 4.**
 - ~~**Stage 2:** guard the meridian lookup~~ — **done**, `check_meridians`. Verified
   to raise on meridian 0 and on a missing meridian, and to pass on 4/5/6.
 - ~~**Stage 2:** assert the coordinates against `surface_location`~~ — **done**,
@@ -346,7 +361,30 @@ one-by-one figures do not involve clustering, which is why they did not move.
 | $750M — batched wells | 29,804 | **29,857** | about 29,803 |
 | $750M — one by one | 21,782 | 21,782 | about 21,782 |
 
-Spend stays under budget in both cases ($49,985,099 and $749,979,760).
+Spend stays under budget in both cases ($49,985,099 and $749,979,760). Budget `0`
+closes nothing and does not crash; so do budgets of $1 and $13,300, because one well
+costs its work plus a full mobilization ($13,300 + $12,000 = $25,300) and nothing
+fits below that.
+
+### Sensitivity: the result rests on a guessed number
+
+Measured at a $50M budget on the corrected model. This is the most important table
+in the project and it belongs in the README too.
+
+| `m_out` | batched | one by one | extra wells | extra % | all-wells BE |
+|---|---|---|---|---|---|
+| $5,000 | 3,190 | 2,732 | 458 | **+16.8%** | 7.00% |
+| $12,000 (default) | 3,109 | 1,976 | 1,133 | **+57.3%** | 18.93% |
+| $25,000 | 2,991 | 1,300 | 1,691 | **+130.1%** | 33.97% |
+
+Tripling a figure nobody published moves the headline benefit from +17% to +130%.
+The guide predicted +17% / +58% / +130% from the old projection, so this conclusion
+survived the Stage 3 fix essentially unchanged.
+
+**Why a dearer haul helps batching so much:** the one-by-one plan pays that cost once
+per *well*, the batched plan once per *trip*. Raising it therefore punishes the
+one-by-one plan far harder — its well count collapses from 2,732 to 1,300 — while the
+batched count barely moves (3,190 to 2,991).
 - The function notes above are one-liners. Stages 2 to 4 expand each file to the
   commenting standard in section 0.1 of the build guide, and this tour gets the
   "why" for each formula alongside it.
