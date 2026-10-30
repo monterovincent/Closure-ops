@@ -4,9 +4,9 @@ A guided map of the code, kept up to date at the end of every stage. For each fi
 it lists every function with one or two plain sentences: what it does and why it
 exists. Read this before reviewing a diff.
 
-**Stage reached: 5 (the app works, and the model got 20x faster).** All three model
-files plus `app.py` are documented to the Stage 0.1 standard. What remains is tests
-and the README (Stage 6), then deployment (Stage 7).
+**Stage reached: 6 (tests, requirements and README done).** All three model files,
+`app.py` and `tests/test_core.py` are documented to the Stage 0.1 standard. The build
+is complete; what remains is deployment (Stage 7), which Vincent performs.
 
 > **Stage 3 changed the numbers.** A projection bug was found and fixed (details
 > under `src/batching.py`). The all-wells result moved from 7,355 batches / BE
@@ -77,6 +77,7 @@ so a reviewer can tell a handled quirk from a new bug after a data refresh.
 |---|---|---|
 | The workbook has two note rows above the header | Row 0 is "Report Created on", row 1 is "Petrinex Data Set", the real header is row 2 | `read_excel(..., header=2)` |
 | Licence numbers have leading zeros | 76,721 of 76,943 begin with `0`, e.g. `0000007` | Read as text everywhere. As numbers, `0000007` becomes `7` and every join silently misses. |
+| **227 licences are not numeric at all** (found in Stage 6) | Suffixed `0050700D`, `0054894I`; prefixed `X0000281`, `Y0002686` | The same fix — text everywhere. Read as numbers these become missing outright rather than merely losing zeros. |
 | The licence file repeats licence numbers | 529,233 rows, 526,897 unique (one licence appears 3x) | `drop_duplicates("LicenceNumber")`, keep the first |
 | The infrastructure file has many rows per licence (linked facilities, commingling) | 680,722 rows, 486,382 unique — 194,340 extra | `drop_duplicates("LicenceNumber")`, keep the first |
 | A depth of `0` means "not reported" | 3,081 rows at exactly 0, plus 2,042 already blank | Replace `0` with missing, then fall back to the median depth when costing |
@@ -367,9 +368,42 @@ fairness the `radius_min_pixels`/`radius_max_pixels` clamps were already masking
 of the exaggeration on screen — the visible symptom was crowding rather than scale —
 but the encoding was wrong in principle and is now right.
 
-## `tests/test_core.py` — Stage 6
+## `tests/test_core.py` — Stage 6 (fully commented)
 
-Not written yet.
+21 checks, running in under 3 seconds. Run with `python -m pytest` from the project
+root — the `python -m` is what puts the root on the import path so `from src.batching
+import ...` resolves. **No test reads anything from `raw/`**, so the suite runs on a
+fresh clone or in the cloud where that 390 MB folder does not exist.
+
+| Area | What the tests prove |
+|---|---|
+| Coordinates | The documented worked example is true; five Alberta towns land within 12 km; the snaking section numbering is handled (sections 1/6 share a latitude, 7 sits above 6, 36 is the north-east corner). |
+| Projection | **Regression test** — distances match great-circle truth in north–south, east–west *and* diagonal directions, within 1%. |
+| Clustering | Every well lands in exactly one batch; the cap holds at several settings; every member is within the radius of its seed; a missing company name raises instead of losing wells. |
+| Cost model | The 15.48% worked example reproduces exactly; a one-well batch saves *exactly* zero. |
+| Budget picker | Spend never exceeds budget across five budgets including zero; a zero budget closes nothing end-to-end on real data; the known greedy suboptimality is documented and pinned; depth tier boundaries are inclusive. |
+| Data integrity | Licence numbers stay text with leading zeros *and* letters; stored coordinates match each well's own `surface_location`; `check_meridians` rejects what it cannot convert. |
+
+**Why the test file writes out its own haversine** rather than importing one: the
+thing being tested *is* the model's geometry. A test that reused the model's own
+distance code could not detect a bug present in both.
+
+**Two tests are regression tests for bugs found during this build** and say so in
+their docstrings — the projection shear (Stage 3) and the one-well boundary. Both
+guard failures that produced plausible-looking numbers rather than errors.
+
+### A data quirk found by a failing test
+
+The leading-zeros test failed on first run, and the failure message exposed something
+the Stage 1 survey had missed: **227 licences contain letters**, either as a suffix
+(`0050700D`, `0054894I`) or a prefix (`X0000281`, `Y0002686`). They are not "numbers
+with leading zeros" — they are not numbers at all. Read numerically they become
+missing outright, not merely mangled. The test now asserts both properties.
+
+The failure itself was my assertion being wrong rather than the code: pandas 3 returns
+a dedicated `StringDtype` where pandas 2 returned `object`. The test now uses
+`pd.api.types.is_string_dtype`, so a library upgrade cannot fail it while the code is
+still correct.
 
 ---
 
@@ -382,8 +416,11 @@ Not written yet.
   `check_join_integrity`. Verified to pass on matching locations and to raise on a
   simulated broken join (0% agreement).
 - ~~**Stage 2:** comment the depth choice~~ — **done**, in `build` STEP 3.
-- **Stage 6:** reuse `check_join_integrity` as a test — it makes a stronger check
-  than leading zeros alone and needs only the committed CSV, not `raw/`.
+- ~~**Stage 6:** reuse `check_join_integrity` as a test~~ — **done**, as
+  `test_stored_coordinates_match_the_wells_own_surface_location`, which re-derives
+  every coordinate from `surface_location` and needs only the committed CSV.
+- ~~**Stage 6:** test the projection against great-circle distance~~ — **done**, as
+  `test_projection_agrees_with_true_distance_in_every_direction`.
 - **Housekeeping:** `core.autocrlf = true`, so git rewrites line endings in the
   11 MB CSV on every checkout. A one-line `.gitattributes` (`data/*.csv -text`)
   would stop git touching the data file at all. Not added — it is not in the
