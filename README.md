@@ -9,7 +9,6 @@ visiting each well on its own.
 
 ![The ClosureOps app](docs/screenshot.png)
 
-
 ---
 
 ## The problem

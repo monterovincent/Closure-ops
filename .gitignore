@@ -4,9 +4,14 @@
 # Downloaded source files: ~390 MB total, far over GitHub's 100 MB file limit.
 raw/
 
-# Secrets: never committed. See Stage 7 of CLOSUREOPS_BUILD_GUIDE.md.
+# Secrets: never committed. If a key is ever needed it goes in the hosting
+# platform's secret settings, read with os.environ or st.secrets - never in code.
 .env
 .streamlit/secrets.toml
+
+# Local-only working notes, kept on disk but out of the repository.
+CLAUDE.md
+CLOSUREOPS_BUILD_GUIDE.md
 
 # Local-only build artefacts.
 __pycache__/
