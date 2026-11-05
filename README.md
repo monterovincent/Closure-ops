@@ -7,7 +7,16 @@ Set a yearly budget and ClosureOps picks the wells, groups the ones close enough
 share a crew trip, and shows how many more wells that grouping buys compared with
 visiting each well on its own.
 
-![The ClosureOps app](docs/screenshot.png)
+### ▶ [Try it live: closureops.streamlit.app](https://closureops.streamlit.app)
+
+Move the budget slider and watch the plan change. Start with the mobilization cost —
+it is a guess, and the whole result turns on it.
+
+> Hosted on a free tier, so the app sleeps after a period of inactivity. If you land
+> on a "Zzzz" screen, click **"Yes, get this app back up!"** and give it about
+> 30 seconds.
+
+![The ClosureOps app](docs/screenshots.png)
 
 ---
 
@@ -70,6 +79,13 @@ this project** and are not AER data.
 
 ## How the model works
 
+Three downloaded files become one table of wells; the model groups those wells into
+trips and prices them; the picker spends the budget.
+
+The split matters for how the app feels. Budget and the company filter only affect
+the final picking step, so they respond instantly. Trip cost, radius and batch cap
+change how wells are grouped, so they re-run the clustering — about a second.
+
 ### 1. Locating the wells
 
 Alberta land is surveyed on a grid, and a well's location is recorded as something
@@ -99,6 +115,9 @@ index does the distance lookups; a full pairwise distance table for Alberta woul
 76,943² × 8 bytes = **47.4 GB**.
 
 ### 3. Pricing a trip
+
+The same wells, the same plugging work either way. The only saving comes from paying
+the long haul once instead of once per well.
 
 ```
 Batched    = one mobilization
@@ -167,6 +186,46 @@ batched plan closes **1,769 fewer** wells than doing them one at a time (30,743
 against 32,512). That is the model being honest rather than broken — with no long haul
 to share, grouping saves nothing while local moves between wells still cost money. The
 entire benefit of this project lives inside a number nobody publishes.
+
+---
+
+## What the app shows
+
+Selected trips on the map, one dot per trip, sized by how many wells it covers:
+
+![Map of selected trips](docs/map.png)
+
+And the plan itself, ordered by risk closed per dollar — the order the model would
+actually do the work in, downloadable as CSV:
+
+![The plan table](docs/plan-table.png)
+
+---
+
+## Watch it being tested
+
+A short walkthrough of five test cases against the live app — including the two edge
+cases where the model's own premise is removed and the result inverts.
+
+<!-- VIDEO GOES HERE.
+     Drag the .mp4 into a comment box on any issue in this repo. GitHub uploads it
+     and returns a URL ending in .mp4 - paste that URL on its own line below this
+     comment, with a blank line either side, and GitHub renders a player. -->
+
+
+| | |
+|---|---|
+| **Test 1** | Does the app reproduce the model? Expect 3,109 batched, 1,976 one at a time. |
+| **Test 2** | Does more money close more wells — and stay instant? |
+| **Test 3** | The result rests on one guessed number: +17% → +57% → +130%. |
+| **Test 4** | Remove that assumption entirely. The saving turns negative. |
+| **Test 5** | Does the maths hold at the boundary? A one-well trip saves exactly 0.0%. |
+
+Tests 4 and 5 are the ones worth watching. Test 4 sets the mobilization cost to zero
+and the benefit inverts — batching then closes *fewer* wells, because local moves
+still cost money while the haul being shared costs nothing. Test 5 checks the
+boundary where the batched and unbatched formulas must agree exactly, which is where
+an off-by-one in the "one fewer local move than wells" term would show up.
 
 ---
 
