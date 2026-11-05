@@ -200,34 +200,7 @@ actually do the work in, downloadable as CSV:
 
 ![The plan table](docs/plan-table.png)
 
----
 
-## Watch it being tested
-
-A short walkthrough of five test cases against the live app — including the two edge
-cases where the model's own premise is removed and the result inverts.
-
-<!-- VIDEO GOES HERE.
-     Drag the .mp4 into a comment box on any issue in this repo. GitHub uploads it
-     and returns a URL ending in .mp4 - paste that URL on its own line below this
-     comment, with a blank line either side, and GitHub renders a player. -->
-
-
-| | |
-|---|---|
-| **Test 1** | Does the app reproduce the model? Expect 3,109 batched, 1,976 one at a time. |
-| **Test 2** | Does more money close more wells — and stay instant? |
-| **Test 3** | The result rests on one guessed number: +17% → +57% → +130%. |
-| **Test 4** | Remove that assumption entirely. The saving turns negative. |
-| **Test 5** | Does the maths hold at the boundary? A one-well trip saves exactly 0.0%. |
-
-Tests 4 and 5 are the ones worth watching. Test 4 sets the mobilization cost to zero
-and the benefit inverts — batching then closes *fewer* wells, because local moves
-still cost money while the haul being shared costs nothing. Test 5 checks the
-boundary where the batched and unbatched formulas must agree exactly, which is where
-an off-by-one in the "one fewer local move than wells" term would show up.
-
----
 
 ## Assumptions and limitations
 
